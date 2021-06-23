@@ -1,0 +1,495 @@
+---
+title: "Flagging Explicit Content on Spotify as a Business Problem and Machine Learning Challenge EDX Capstone CYO"
+author: "Matthew Saayman"
+date: "23/06/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, echo=FALSE,message=FALSE, warning = FALSE}
+
+if(!require(xfun)) install.packages("xfun",repos = "http://cran.us.r-project.org")
+if(!require(knitr)) install.packages("knitr",repos = "http://cran.us.r-project.org")
+if(!require(here)) install.packages("here",repos = "http://cran.us.r-project.org")
+if(!require(rpart)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+
+
+library(xfun)
+library(knitr)
+library(here)
+library(rpart)
+library(tidyverse)
+library(caret)
+library(randomForest)
+
+#if the following download links don't work, proceed to the next block which references google drive links
+
+ 
+url1 <- "https://www.dropbox.com/s/3bbhnneh6h2er2y/tracks.csv?dl=1"
+tracks <- tempfile()
+download.file(url1,"tracks.csv")
+#Read the required CSV files
+tracks  <- read.csv(here("tracks.csv"), row.names=NULL)
+head(tracks)
+
+#note the artists table is not included in this block of code because isn't required for the final PDF report.
+#The artists table is explored with the accompanying R code.
+
+ 
+#OPTIONAL. 
+#this code downloads from google drive. Only use if the above dropbox files did not work
+
+#url3 <- "https://drive.google.com/file/d/1F1n9H5lyb2gA6XwWotxxUsfCPmRYeTTd/view?usp=sharing"
+#tracks <- tempfile()
+#download.file(url2,"tracks.csv")
+#tracks  <- read.csv(here("tracks.csv"), row.names=NULL)
+#head(tracks)
+
+ 
+
+ 
+
+#visually inspect the new data frames to understand their structure and to confirm they were properly loaded
+ 
+str(tracks)
+head(tracks)
+
+
+ 
+
+
+#Create a year column from the release_Date column. Some values have only the year, while others the year,month and day. 
+#An if/then formula is therefore required
+
+
+tracks$year <- ifelse(str_length(tracks$release_date) == 4, tracks$release_date,ifelse(str_length(tracks$release_date) == 7, 
+                                                                                       as.numeric(str_sub(tracks$release_date, -7,-4)),
+                                                                                       as.numeric(str_sub(tracks$release_date, -10,-7))))
+#Check to see the unique values for year 
+
+unique(tracks$year)
+
+#convert to numeric variable
+
+tracks$year <- as.numeric(tracks$year)
+
+
+#To make the information on song length easier to interpret, we will create a minute column. 
+#60,000 milliseconds in a minute, so the new column will be X/60,000
+
+tracks$duration_min <- tracks$duration_ms/60000
+tracks$duration_min <- round(tracks$duration_min,2)
+
+#Create a key letter column A value of 0 is C, 1 is C#, and so on
+
+
+tracks$keyletter <- if_else(tracks$key == 0, 
+                            "C",if_else(tracks$key == 1, 
+                                        "C#",if_else(tracks$key == 2, 
+                                                     "D",if_else(tracks$key == 3, 
+                                                                 "D#",if_else(tracks$key == 4, 
+                                                                              "E",if_else(tracks$key == 5, 
+                                                                                          "F",if_else(tracks$key == 6, "F#",
+                                                                                                      if_else(tracks$key == 7, "G",
+                                                                                                              if_else(tracks$key == 8, "G#",if_else(tracks$key == 9, "A",if_else(tracks$key == 10,"A#","B",
+                                                                                                                                                                                 if_else(tracks$key == 11,"B",""))))))))))))
+
+
+#exploratory visualizations
+
+
+#How many tracks have explicit content?
+
+excount <- sum(tracks$explicit == 1)
+nonexcount <- sum(tracks$explicit == 0)
+
+excount / nrow(tracks)
+
+#Less than 5%
+
+
+
+#instrumentalness,speechiness, colored by explicit
+set.seed(1)
+tracks %>% sample_n(1000) %>%
+  ggplot(aes(instrumentalness, speechiness,color = as.factor(explicit))) +
+  geom_point() + labs(color = "Explicit") + xlab("Instrumentalness") + ylab("Speechiness")+ ggtitle("Figure 1 - Speechiness by Instrumentalness")
+
+#Are those tracks high in speechiness more likely to be audio books? We can look at the proportion of the presence of the word 'chapter'
+
+
+chapters <- tracks %>% 
+  filter(speechiness > .95 & str_detect(tolower(name), pattern = "chapter")) %>% nrow()
+
+speechy_tracks <- tracks %>% 
+  filter(speechiness > .95) %>% nrow()
+
+chapters/speechy_tracks
+
+
+
+
+#let's look at the correlation between the various numeric columns
+
+
+#Loudness and energy, colored bY explicit
+
+set.seed(1)
+tracks %>%  sample_n(1000) %>% ggplot(aes(loudness, energy,color = as.factor(explicit))) +
+  geom_point(alpha = .5) + labs(color = "Explicit") + xlab("Loudness") + ylab("Energy") + ggtitle("Figure 2 - Loudness and Energy") + labs(fill = "Explicit")
+
+
+#Valence and danceability, colored by explicit
+set.seed(1)
+tracks %>% sample_n(1000) %>% ggplot(aes(valence, danceability,color = as.factor(explicit))) +
+  geom_point(alpha = .6) + labs(color = "Explicit")  + xlab("Valence") + ylab("Danceability") + ggtitle("Figure 3- Valence and Danceability") + labs(fill = "Explicit") + geom_smooth()
+
+
+#popularity and duration in minutes, colored by explicit
+set.seed(1)
+tracks %>% sample_n(2000) %>% ggplot(aes(popularity,duration_min,color = as.factor(explicit))) +
+  geom_point(alpha = .75) + labs(color = "Explicit")  + xlab("Popularity") + ylab("Duration in Minutes") + ggtitle("Popularity by Duration in Minutes") + labs(fill = "Explicit") + ylim(0,5)
+
+
+#looking at key signature as well as mode, we see which keys occur the most , as well as which have the highest proportion of explicit content
+
+
+
+
+set.seed(1)
+tracks  %>% sample_n(2000) %>% ggplot(aes(keyletter, fill = as.factor(explicit))) +  geom_bar() + xlab("Key Signature") + ylab("Number of Songs") + ggtitle("Figure 4 - Songs By Key Signature Count, Explicit") + 
+  labs(fill = "Explicit")  
+
+
+#presence of C major key 
+sum(tracks$keyletter == "C")/nrow(tracks)
+
+
+#12% 
+sum(tracks$keyletter == "G")/nrow(tracks)
+#12% 
+
+#Here we filter to look at only songs where there was explicit content
+set.seed(1)
+tracks %>% filter(explicit == 1) %>% sample_n(2000) %>%  ggplot(aes(keyletter)) +  geom_bar(fill = "deepskyblue3") + xlab("Key Signature") + ylab("Number of Songs") + ggtitle("Figure 5 Songs by key Signature, Only Those Containing Explicit Content")  
+
+set.seed(1)
+tracks  %>% sample_n(500) %>% ggplot(aes(valence, popularity, color = as.factor(mode))) + geom_point() + xlab("Valence") +  ylab("Popularity") + ggtitle(" Popularity and Valence, and Mode - Major or Minor") + labs(fill = "mode") 
+
+
+
+
+#loudness, popularity and explicit  content
+
+
+tracks  %>% sample_n(2000) %>% ggplot(aes(loudness, popularity, color = as.factor(explicit))) +
+  geom_point(alpha = .75) + labs(color = "Explicit") 
+ 
+
+#Is there a relationship between the release year and explicit content?
+
+tracks  %>% select(year,popularity, explicit) %>% group_by(year) %>% summarize(average_pop = mean(popularity),
+                                                                               average_ex = mean(explicit)) %>% filter(year > 1950) %>%
+  ggplot(aes(year,average_ex))  +  geom_line(group = 1, color = "deepskyblue3") + xlab("Release Year") + ylab("Figure 6 - Average Explicitness") + ggtitle("Average Explict Content by Release Year")
+
+ 
+
+#Scatterplot matrix
+smallsample <- sample_n(tracks,1000)
+pairs(~ explicit + loudness + liveness + instrumentalness + valence + year, data = smallsample,col = 'deepskyblue3',
+      main = "Figure 7 - Scatterplot Matrix")
+
+sample_n(tracks,1000) %>% ggplot(aes(year,popularity, color = explicit)) + geom_point()
+
+#MODELLING ######################################
+#KNN nearest neighbors
+
+
+#There is insufficient computing power to work with the entire dataset of 600K
+#Therefore, a sample is taken
+
+
+set.seed(1)
+sample <- sample_n(tracks,50000)
+
+#To create a KNN algorithim we should remove non-numeric variables. ID, ID artists, artist name, and track name are removed
+#The column on duration_min is not included either because the same information is captured with duration_ms
+#the duration min column was only for exploratory and visualization purposes
+
+sampleclean <- sample[,c(3,4,5,9,10,11,12,13,14,15,16,17,18,19,20,21)]
+
+
+
+#Create an index and partition the data into training and test sets,
+newtestindex <- createDataPartition(y = sampleclean$explicit, times = 1, p = 0.5, list = FALSE)
+trainex <- sampleclean[-newtestindex,]
+testex <- sampleclean[newtestindex,]
+
+#Convert the explicit column values to factors
+trainex$explicit <- as.factor(trainex$explicit)
+testex$explicit <- as.factor(testex$explicit)
+
+#one method for arriving at the best value of K for the KNN algorithim is to consider the SQRT of the number of observations
+
+sqrt(nrow(trainex))
+#158
+sqrt(nrow(sampleclean))
+#223
+sqrt(nrow(testex))
+#158
+
+
+#Now let's create a KNN model with a K value set to 158
+
+train_knn  <- knn3(explicit ~ ., data = trainex, k = 158)
+
+# Now create a confusion matrix to see the accuracy of the above model. 
+#the predicted values (explicit, 0 or 1) are compared to the real results of the test set
+
+confusionMatrix(predict(train_knn, testex, type = "class"),
+                testex$explicit) 
+
+confusionMatrix(predict(train_knn, testex, type = "class"),
+                testex$explicit)$overall["Accuracy"]
+
+#accuracy is  0.9547 , n sample was 50,000
+#sensitivity is 1
+#overall accuracy .95468
+
+
+
+#Can the model be improved with a larger value of K? 
+#Arbitrarily we set a value of 200
+
+train_knn  <- knn3(explicit ~ ., data = trainex, k = 200)
+confusionMatrix(predict(train_knn, testex, type = "class"),
+                testex$explicit)$overall["Accuracy"]
+
+#accuracy is .95468, no change, nsample was 50,000
+
+
+
+#When we set the value of K to 1, the accuracy lowers to .92812
+train_knn  <- knn3(explicit ~ ., data = trainex, k = 1)
+confusionMatrix(predict(train_knn, testex, type = "class"),
+                testex$explicit)$overall["Accuracy"]
+
+
+#What about a randm forest?
+#to help with faster processing times we take a smaller sample
+set.seed(1)
+sample <- sample_n(tracks,2000)
+sampleclean <- sample[,c(3,4,5,9,10,11,12,13,14,15,16,17,18,19,20,21)]
+#Random forest
+
+
+
+newtestindex <- createDataPartition(y = sampleclean$explicit, times = 1, p = 0.5, list = FALSE)
+trainex <- sampleclean[-newtestindex,]
+testex <- sampleclean[newtestindex,]
+
+#Convert the explicit column values to factors
+trainex$explicit <- as.factor(trainex$explicit)
+testex$explicit <- as.factor(testex$explicit)
+train_rf <- randomForest(explicit~., data = trainex) 
+
+
+
+confusionMatrix(predict(train_rf, testex, type = "class"),
+                testex$explicit) 
+
+
+```
+**Introduction**
+
+The internet has democratized information by making it widely accessible while at the same time increasing the risk that a user will be exposed to content they deem offensive. Entertainment such as video games, movies or music may have a label indicating the presence of adult or explicit content, but it is possible such content may be falsely labelled as inoffensive. From a user experience perspective, being unable to easily distinguish between offensive or non-offensive content could contribute to decreased satisfaction with a service or product. Ensuring products and services accurately flag explicit content is therefore an important business problem.
+
+Is it possible to develop an algorithm to flag music as containing explicit content? Presumably one way to flag such music is analyze the presence of certain words in the song lyrics. In this paper, an alternative approach is presented. Using a freely available dataset from Kaggle, this paper examines various qualities of individual tracks to predict whether or not a song has explicit content. A KNN nearest neighbor model and a random forest model are constructed.
+
+The structure of the paper is as follows: 
+
++ Section 1: Description of the dataset and data wrangling challenges presented by the dataset
++ Section 2: Exploration of the data through visualization
++ Section 3: Description of the two models
++ Section 4: Results of the models and limitations
++ Section 5: Discussion and conclusion
+
+**Section 1: Description of the dataset**
+
+We will work with a freely available dataset on Kaggle containing 600,000 tracks from Spotify, songs released between 1922 and 2021.^[https://www.kaggle.com/yamaerenay/spotify-dataset-19212020-160k-tracks]
+
+
+The *tracks* table has the following columns:
+
++ ID (a unique ID generated by Spotify for each track)
++ Acousticness (a value from 0 to 1)
++ Danceability (a value from 0 to 1)
++ Energy (a value from 0 to 1)
++ Duration_ms (duration in miliseconds)
++ Instrumentalness (a value from 0 to 1). The degree to which a track contains more instrumental or vocal music, with a value of 1 implying no vocals present 
++ Valence (a value from 0 to 1). The “positiveness” or happiness of the song. A song with high valence would be cheerful or euphoric. 
++ Popularity (a value from 0 to 100)
++ Tempo (a value from 50 to 150)
++ Liveness (a value  from 0 to 1)
++ Loudness (a value from -60 to 0, representing the averaged decibals of the track). A value is negative because of Spotify’s normalization process, which ensures a consistent perceived loudness between tracks.  
++ Speechiness (Ranges from 0 to 1). Indicates the presence of spoken words in the track. An audio book track would have a value close to 1.
++ Mode: Indicating whether a song is in minor (0) or major (1)     
++ Explicit: indicating whether a song has explicit content (1) or not (0) (
++ Key: Indicating the key signature of the song, with all keys encoded as values from 0 to 11 ( C as 0, C#, etc.)
++ Timesignature: the time signature of the song.
+artists (List of artists mentioned, may include multiple artists)
++ ID_Artists (unique identifier for artists)
++ Release_date (Date of release mostly in yyyy-mm-dd format)
++ Name: The name of the track
+
+Information on the track elements are found here: https://developer.spotify.com/documentation/web-api/reference/#endpoint-get-track 
+
+The dataset does not present major obstacles from a formatting or wrangling perspective. However, for ease of interpretation in the next section, we compute three new columns:
+
+Year Column:
+
++ The release year column has multiple formats stored within it(ranging from YYYY-MM-DD to YYYY-MM). 
++ We therefore create a new column ‘year’, containing only the year in which the track was released.
+
+Key Letter Column:
+
++ The key values from the “Key” column are re-coded as actual key signatures. 
++ So 0 becomes “C”, 1 becomes “C#”, and so on.^[Note that here we are coding as the same those keys which are enharmonically identical The key of C# sounds identical to the key of D-flat major but the notation is different and their relationships with other keys are different. Any song in the dataset that was in D-flat major is treated as C# major here.]
+
+Duration in Minutes Column:
+
++ A column showing the length of the song track in minutes is computed from the duration in milliseconds column. 
+
+Finally, it should be noted that there is also an *artists* table in the dataset.It contains many of the same columns as above but also includes a genre column (whereas the *tracks* table does not). Due to the complexity of wrangling that data (there is a value for each genre combination), we do not consider present the information here. In the accompanying code, we do perform a brief exploration of that data including a joining of the *artists* and *tracks* tables.  
+
+**Section 2: Exploration of the data through visualization**
+
+Less than 5% of the 600K songs in the dataset are marked as explicit. Our aim is to predict whether a song has explicit lyrics but *without* reference to the lyrics. How can we do that? A cursory glance at the structure of the *tracks* table suggests there are a variety of columns that could shed some light on this question.
+
+“Speechiness” and “instrumentalness” for example we should expect to be negatively correlated with having explicit content. Speechiness indicates the degree to which a track has spoken words (as opposed to sung) present. Figure 1 shows the relationship between speechiness and instrumentalness, and data points are colored as being explicit (1) or not explicit (0). Tracks that are high on the speechiness scale are low on the instrumentalness scale, and vice versa. Furthermore, tracks that are explicit are low in both variables. As  quick calculation reveals that 20% of those tracks with a speechiness of more than .95 have the word ‘chapter’ in their name, suggesting they are tracks in an audiobook.
+
+```{r figure1,  echo=FALSE,message=FALSE, warning = FALSE}
+set.seed(1)
+tracks %>% sample_n(1000) %>%
+  ggplot(aes(instrumentalness, speechiness,color = as.factor(explicit))) +
+  geom_point() + labs(color = "Explicit") + xlab("Instrumentalness") + ylab("Speechiness")+ ggtitle("Figure 1 - Speechiness by Instrumentalness")
+
+```
+
+“Loudness” and “energy” are two other characteristics which are, predictably, closely related.
+Figure 2 demonstrates that relationship as well as the presence of explicit tracks.
+
+```{r figure 2, echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(1)
+tracks %>%  sample_n(1000) %>% ggplot(aes(loudness, energy,color = as.factor(explicit))) +
+  geom_point(alpha = .5) + labs(color = "Explicit") + xlab("Loudness") + ylab("Energy") + ggtitle("Figure 2 - Loudness and Energy") + labs(fill = "Explicit")
+```
+
+What about valence (positivity/cheerfulness) and danceability? Figure 3 plots this relationship as well as showing the presence of explicit tracks. A regression line Is added for explicit and non-explicit tracks. The trend suggests explicit tracks may have higher danceability than non-explicit tracks.
+
+```{r figure 3, echo=FALSE,message=FALSE, warning = FALSE}
+ 
+set.seed(1)
+tracks %>% sample_n(1000) %>% ggplot(aes(valence, danceability,color = as.factor(explicit))) +
+  geom_point(alpha = .6) + labs(color = "Explicit")  + xlab("Valence") + ylab("Danceability") + ggtitle("Figure 3- Valence and Danceability") + labs(fill = "Explicit") + geom_smooth()
+```
+
+What about key signature? Historically, the use of different musical keys have been associated with different emotions.^[https://wmich.edu/mus-theo/courses/keys.htm]  In addition, certain keys are easier to play in. Unsurprisingly, C and G are the two most common keys for songs. G major is among the easiest keys to play in for piano and violin, and c major is considered a happy key.^[https://gizmodo.com/a-chart-of-the-most-commonly-used-keys-shows-our-actual-1703086174] 
+
+```{r figure 4, echo=FALSE,message=FALSE, warning = FALSE}
+ 
+set.seed(1)
+tracks  %>% sample_n(2000) %>% ggplot(aes(keyletter, fill = as.factor(explicit))) +  geom_bar() + xlab("Key Signature") + ylab("Number of Songs") + ggtitle("Figure 4 - Songs By Key Signature Count, Explicit") + 
+  labs(fill = "Explicit")  
+```
+
+When we filter to the data to only include those tracks that are explicit, C# is the most commo (Figure 5).
+
+```{r figure 5, echo=FALSE,message=FALSE, warning = FALSE}
+ 
+set.seed(1)
+tracks %>% filter(explicit == 1) %>% sample_n(2000) %>%  ggplot(aes(keyletter)) +  geom_bar(fill = "deepskyblue3") + xlab("Key Signature") + ylab("Number of Songs") + ggtitle("Figure 5 Songs by key Signature, Only Those Containing Explicit Content") 
+```
+
+What about year? When we look at the average occurrence of an explicit song in each release year a clear trend emerges, with this number gradually increasing from 1980 onwards before spiking around 2000 (Figure 6).
+
+```{r figure 6, echo=FALSE,message=FALSE, warning = FALSE}
+ 
+tracks  %>% select(year,popularity, explicit) %>% group_by(year) %>% summarize(average_pop = mean(popularity),
+                                                                               average_ex = mean(explicit)) %>% filter(year > 1950) %>% ggplot(aes(year,average_ex)) + geom_line(group = 1, color = "deepskyblue3") + xlab("Release Year") + ylab("Figure 6 - Average Explicitness") + ggtitle("Average Explict Content by Release Year")
+```
+
+Finally, the following figure shows the pair-wise relationship between various numeric indicators in the dataset.The chart provides a quick summary of some of the relationships we have seen so far. Looking at the scatterplot for year and explicit, most explicit songs (value of 1) are after 1980. Similarly, with instrumentalness, most tracks with high instrumentalness are not explicit (value of 0).
+
+```{r figure 7, echo=FALSE,message=FALSE, warning = FALSE}
+smallsample <- sample_n(tracks,1000)
+pairs(~ explicit + loudness + liveness + instrumentalness + valence + year, data = smallsample,col = 'deepskyblue3',
+      main = "Figure 7 - Scatterplot Matrix")
+```
+
+
+**Section 3: Description of the two models**
+
+So far we have looked at various numeric variables in the *tracks* table  and how they might relate to whether or not a song is explicit. Now we proceed to discuss building a KNN nearest neighbor model and a random forest model.
+
+*KNN Nearest Neighbor*
+
+KNN Nearest Neighbor may be used for either classification or prediction. As we saw in the machine learning course, this can be a more accurate method than linear regression. 
+
+KNN Nearest Neighbor takes the Euclidean distance between each datapoint and groups individual data points according to a specified value, K. Euclidean distance is the quare root of the sum of squared differences between two vectors. Values are squared to ensure negative and positive values will not cancel each other out. K is any value from 1 to infinity. 
+
+
+With K set to a value of 1, an algorithm will treat a new data point’s “nearest neighbor” as the first closest data point. Such a value will obviously not prove insightful and leads to overfitting.^[https://shapeofdata.wordpress.com/2013/05/07/k-nearest-neighbors] At the other extreme, too high a value may obscure the complexity of the dataset.^[https://machinelearningmastery.com/distance-measures-for-machine-learning/]
+
+Since the model will be calculating the distance between points, certain columns in the tracks dataset will be excluded. ID, name, artist, and genre for example are excluded before building the model.
+
+Due to the limitations of this author’s computer, we will not use the full dataset. Instead, a random sample of 50,000 is taken. 
+
+
+
+
+
+
+
+One way to identify the optimal value of K is to take the square root of the number of observations of the dataset.^[https://towardsdatascience.com/how-to-find-the-optimal-value-of-k-in-knn-35d936e554eb]
+
+We therefore set K at 158, the square root of the number of rows for the training set.
+
+*Random Forest*
+
+While the KNN nearest model might yield a high accuracy, we want to be able to compare its results to another model. Random Forest is another popular machine learning algorithm. It aggregates the results of randomly built decision trees.
+
+A decision tree can be thought of a flow of yes / no questions. For example, an algorithm could be used to classify a candidate as suitable for being contacted for an interview. 
+
++ Is the candidate over a certain age?
++ If yes, does the candidate have the required education? 
++ If yes, does the individual have X years of work experience?
++ If yes, does the individual have X proficiency in English?
+
+Depending on the answer to each question, the algorithm would proceed on to the next question before arriving at the final classification of ‘yes’ or no’. However, a single decision tree will yield a lower accuracy. The ordering of these above questions could affect the accuracy, specifically the choice of which question will act as the starting node.
+
+A random forest randomly samples the data (with replacement) and randomly selects a variable from the dataset to act as the starting node. The final output of the algorithm will be determined by whatever value the majority of decision trees predict.
+
+**Section 4: Results of the models and limitations**
+'
+KNN Model 1
+
+With a random sample of 50,000 an K of 158, we obtain an accuracy of . 95468.
+The sensitivity is 1.0 (the ratio of true positives).
+
+For our purposes, we want to ensure the model has a low level of false negatives. We can imagine a user interacting with the algorithm would be more upset with encountering a song incorrectly labelled as not explicit (False negative) than they would be with encountering a song incorrectly labelled as explicit (false positive).
+
+The specificity is 0 (the ratio of true negatives).
+
+When we set the value of K to 200, the accuracy and sensitivity does not change.
+
+Random Forest Model
+Our model yields an accuracy of .959, a sensitivity value of .99 and a specificity value of .17. Along multiple metrics, the random forest model outperforms the KNN model.
+
+**Section 5: Discussion and conclusion**
+
+This paper sought to address a business problem: how can we create a model to automatically identify songs containing explicit content? Using a publicly available dataset of 600,000 tracks from the music streaming service Spotify, this paper began by exploring the relationships between various numeric indicators. We then discussed two different methods, KNN nearest neighbors and random forests. Both methods produced favourable results, including high accuracy and sensitivity. However, a random forest method was deemed marginally stronger than KNN nearest neighbors. 
+
+Overall, the paper served as an exploration of and study of the above methods. Future modelling could incorporate predicators such as musical genre, name, and artist. 
